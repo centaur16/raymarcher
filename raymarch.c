@@ -1,6 +1,7 @@
 /*
  * A simple CPU raymarcher that writes the result to a BMP file
- * (c) David Horstmann, 05/2019, All Rights Reserved
+ *
+ * TODOs 
  * Top TODO: make everything less hard-coded, add some kind
  *           of object data structure, allow more than one colour
  *     TODO: threading / parallelisation
