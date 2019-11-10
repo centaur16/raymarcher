@@ -6,6 +6,6 @@ this should be changed at some point.
 
 To compile, run
 ```shell
-gcc -o raymarch raymarch.c -lm
+gcc -o raymarch raymarch.c -lm -lpthread
 ```
 

@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <math.h>
+#include <pthread.h>
 
 #define BITS_PER_PIXEL 24
 
@@ -71,6 +72,21 @@ struct
     float z;
 }
 vec3_f;
+
+typedef
+struct
+{
+    pixel *px_buf;
+    int px_buf_len;
+    uint32_t region_x;
+    uint32_t region_y;
+    uint32_t region_width;
+    uint32_t region_height;
+    uint32_t screen_width;
+    uint32_t screen_height;
+    float px_unit;
+}
+march_region_args;
 
 int pack_pix_row(uint8_t *row, uint32_t row_len, pixel *image_row, uint32_t image_row_len)
 {
@@ -171,9 +187,14 @@ float smin(float a, float b, float k)
     return ((1.0 - h)*b + h*a) - k * h * (1.0 - h);
 }
 
+float sphere(vec3_f centre, float radius, vec3_f pos)
+{
+    return magnitude(sub(pos, centre)) - radius;
+}
+
 float sphere_sdf(vec3_f pos)
 {
-    return magnitude(pos) - 40.0;
+    return sphere((vec3_f){0.0, 0.0, 0.0}, 40.0, pos);
 }
 
 float cube_sdf(vec3_f pos)
@@ -286,9 +307,6 @@ void march(pixel *px, uint32_t x, uint32_t y, uint32_t width, uint32_t height, f
     }
 }
 
-#if 0
-/* WIP functions for parallelisation */
-
 /* Ray march a rectangular region of pixels. Rectangular rather than sequential was chosen as it is likely to contain the same objects in a
  * scene so future bounding-box optimisations may be easier. */
 /* The region is written into px_buf row-by-row from low-to-high x and low-to-high y (i.e. [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1), ...]
@@ -315,6 +333,13 @@ int march_region(pixel *px_buf, int px_buf_len, uint32_t region_x, uint32_t regi
     return 0;
 }
 
+void *thread_march_region(void *args_struct)
+{
+    march_region_args *args = (march_region_args *)args_struct;
+    march_region(args->px_buf, args->px_buf_len, args->region_x, args->region_y, args->region_width, args->region_height, args->screen_width, args->screen_height, args->px_unit);
+    return NULL;
+    /*TODO err handling passthrough */
+}
 
 int merge_region(pixel *image, int image_len, uint32_t screen_width, uint32_t screen_height, pixel *px_buf, int px_buf_len, uint32_t region_x, uint32_t region_y, uint32_t region_width, uint32_t region_height)
 {
@@ -333,26 +358,74 @@ int merge_region(pixel *image, int image_len, uint32_t screen_width, uint32_t sc
         {
             for(j = 0; j < region_width; j++)
             {
-                image[region_y + i][region_x + j] = px_buf[i*region_width + j];
+                image[(region_y + i)*screen_width + region_x + j] = px_buf[i*region_width + j];
             }
         }
     }
     return 0;
 }
-/* ENDWIP */
-#endif
+
+void create_thread_args(march_region_args *thread_args, pixel **thread_bufs, uint32_t num_threads, uint32_t screen_width, uint32_t screen_height, float px_unit)
+{
+    int i;
+
+    for (i = 0; i < num_threads; i++)
+    {
+        thread_args[i].screen_width = screen_width;
+        thread_args[i].screen_height = screen_height;
+        thread_args[i].px_unit = px_unit;
+    }
+    /* Divide screen into regions and allocate to threads - for now do horizontal split,
+        but consider changing for more square regions in future to limit objects
+        in each thread's view */
+    if (screen_height >= num_threads)
+    {
+        for (i = 0; i < num_threads; i++)
+        {
+            thread_args[i].region_x = 0;
+            thread_args[i].region_y = screen_height * i / num_threads;
+            thread_args[i].region_width = screen_width;
+            if (i == num_threads - 1) /* Last thread does leftovers */
+                thread_args[i].region_height = screen_height - thread_args[i].region_y;
+            else
+                thread_args[i].region_height = screen_height * (i+1) / num_threads - thread_args[i].region_y;
+
+            thread_bufs[i] = (pixel *)malloc(thread_args[i].region_width * thread_args[i].region_height * sizeof(pixel));
+
+            if (thread_bufs[i] == NULL)
+            {
+                /* TODO better err handling than this */
+                fprintf(stderr, "malloc of thread buffer failed\n");
+                return;
+            }
+
+            thread_args[i].px_buf = thread_bufs[i];
+            thread_args[i].px_buf_len = thread_args[i].region_width * thread_args[i].region_height;
+        }
+    }
+    else
+    {
+        fprintf(stderr, "Image is not tall enough for this simplistic region allocation algorithm\n");
+    }
+}
 
 int main(void)
 {
-    /* TODO endianness neutrality - BMP uses little endian by default */
+    uint32_t num_threads = 16;
+    pthread_t thread_ids[num_threads];
+    march_region_args thread_args[num_threads];
+    pixel *thread_px_bufs[num_threads];
+    int i;
 
+    /* TODO endianness neutrality - BMP uses little endian by default */
     bmp_header hdr;
     dib_header dib_hdr;
 
     int32_t height = 1080;
     int32_t width = 1920;
 
-    pixel image[height][width];
+    pixel image[height*width];
+    pixel *rend_buf;
 
     uint32_t px_row_size = (((width * BITS_PER_PIXEL) + 31) / 32) * 4; /* Integer ceil((width * BITS_PER_PIXEL) / 32) * 4 (for number of bytes) */
 
@@ -365,21 +438,24 @@ int main(void)
 
     uint32_t row_no, col_no;
 
-    printf("Rendering:");
-    printf(" %5.2f%%", (float)0*100.0/(float)height);
-    for(row_no = 0; row_no < height; row_no++)
-    {
-        for(col_no = 0; col_no < width; col_no++)
-        {
-            march(&image[row_no][col_no], col_no, row_no, width, height, 0.1);
-        }
-        printf("\b\b\b\b\b\b\b");
-        fflush(stdout);
-        printf(" %5.2f%%", (float)row_no*100.0/(float)height);
-    }
-    printf("\b\b\b\b\b\b\b");
+    printf("Rendering:\n");
     fflush(stdout);
-    printf(" done. \n");
+
+    create_thread_args(thread_args, thread_px_bufs, num_threads, width, height, 0.1);
+
+    for (i = 0; i < num_threads; i++)
+    {
+        pthread_create(&thread_ids[i], NULL, thread_march_region, (void *)&thread_args[i]);
+    }
+
+    for (i = 0; i < num_threads; i++)
+    {
+        /* TODO err handling (both for threads and merging) */
+        pthread_join(thread_ids[i], NULL);
+        merge_region(image, width*height, width, height, thread_args[i].px_buf, thread_args[i].px_buf_len,
+                thread_args[i].region_x, thread_args[i].region_y, thread_args[i].region_width, thread_args[i].region_height);
+        free(thread_px_bufs[i]);
+    }
 
     FILE *img = fopen("img.bmp", "w");
 
@@ -415,7 +491,7 @@ int main(void)
 
         for(row_no = 0; row_no < height; row_no++)
         {
-            pack_pix_row(pixel_row, px_row_size, image[row_no], width);
+            pack_pix_row(pixel_row, px_row_size, image + (width*row_no), width);
             fwrite((void *)pixel_row, (size_t)1, (size_t)px_row_size, img);
         }
 
