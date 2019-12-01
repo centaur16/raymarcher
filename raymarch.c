@@ -4,7 +4,6 @@
  * TODOs 
  * Top TODO: make everything less hard-coded, add some kind
  *           of object data structure, allow more than one colour
- *     TODO: threading / parallelisation
  *     TODO: networked parallelisation (for clusters)
  *
  *      ...
@@ -232,39 +231,36 @@ float get_sdf(vec3_f pos)
 /*    return smin(cube_sdf(pos), sphere_sdf(pos), 0.7);*/
 }
 
-void march(pixel *px, uint32_t x, uint32_t y, uint32_t width, uint32_t height, float px_unit)
+void print_vec3_f(vec3_f v)
 {
-    vec3_f pixel_pos, camera_pos, march_pos, march_step;
+    printf("{ %f, %f, %f } ", v.x, v.y, v.z);
+}
+
+vec3_f march_ray(vec3_f march_pos, vec3_f march_direction)
+{
+    vec3_f march_step;
     vec3_f surface_normal, light_pos, light_vec, reflect_vec;
     vec3_f k_amb, k_diff, diffuse, k_spec, specular, colour;
 
     float sdf;
-    uint32_t steps;
-
     float n_spec;
+
+    uint32_t steps;
 
     light_pos = (vec3_f){80.0, 80.0, -60.0};
 
-    pixel_pos.x = px_unit * ((float)x - (float)width/2.0);
-    pixel_pos.y = px_unit * ((float)y - (float)height/2.0);
-    pixel_pos.z = -128.0;
-
-    camera_pos.x = 0.0;
-    camera_pos.y = 0.0;
-    camera_pos.z = -100000.0;
-
-    march_pos = pixel_pos;
-
-    march_step = normalise(sub(pixel_pos, camera_pos));
-
+    march_step = normalise(march_direction);
     sdf = get_sdf(march_pos);
+
     steps = 0;
+
     while(sdf > 0.001 && steps < 2000)
     {
         march_pos = add(march_pos, mul(march_step, sdf));
         steps++;
         sdf = get_sdf(march_pos);
     }
+
     if(sdf < 0.001)
     {
         /* Constants */
@@ -286,7 +282,7 @@ void march(pixel *px, uint32_t x, uint32_t y, uint32_t width, uint32_t height, f
         /* Calculate specular lighting */
         reflect_vec = normalise(sub(march_step, mul(surface_normal, 2.0*dot(march_step, surface_normal))));
         specular = mul(k_spec, powf(fmaxf(dot(reflect_vec, light_vec), 0.0), n_spec));
-
+ 
         /* Calculate final colour */
         colour = add(specular, add(diffuse, k_amb));
 
@@ -294,17 +290,44 @@ void march(pixel *px, uint32_t x, uint32_t y, uint32_t width, uint32_t height, f
         colour.x = fminf(colour.x, 1.0);
         colour.y = fminf(colour.y, 1.0);
         colour.z = fminf(colour.z, 1.0);
-
-        px->red = (uint8_t)(255.0*colour.x);
-        px->green = (uint8_t)(255.0*colour.y);
-        px->blue = (uint8_t)(255.0*colour.z);
     }
     else
     {
-        px->red = 0;
-        px->green = 0;
-        px->blue = 0;
+        colour = (vec3_f){0.0, 0.0, 0.0};
     }
+
+    return colour;
+}
+
+void march(pixel *px, uint32_t x, uint32_t y, uint32_t width, uint32_t height, float px_unit)
+{
+    vec3_f pixel_pos, camera_pos, march_start_pos, ray_direction;
+    vec3_f surface_normal, light_pos, light_vec, reflect_vec;
+    vec3_f k_amb, k_diff, diffuse, k_spec, specular, colour;
+
+    float sdf;
+    uint32_t steps;
+
+    float n_spec;
+
+    pixel_pos.x = px_unit * ((float)x - (float)width/2.0);
+    pixel_pos.y = px_unit * ((float)y - (float)height/2.0);
+    pixel_pos.z = -128.0;
+
+    camera_pos.x = 0.0;
+    camera_pos.y = 0.0;
+    camera_pos.z = -100000.0;
+
+    march_start_pos = pixel_pos;
+
+    ray_direction = normalise(sub(pixel_pos, camera_pos));
+
+    colour = march_ray(march_start_pos, ray_direction);
+
+    px->red = (uint8_t)(255.0*colour.x);
+    px->green = (uint8_t)(255.0*colour.y);
+    px->blue = (uint8_t)(255.0*colour.z);
+
 }
 
 /* Ray march a rectangular region of pixels. Rectangular rather than sequential was chosen as it is likely to contain the same objects in a
