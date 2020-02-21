@@ -12,6 +12,12 @@
  * Sub-Bottom TODO: Render video
  */
 
+/*
+ * Optimization notes: currently many calls to fsqrt that could
+ * perhaps be replaced by local (inlineable) version?
+ * Or maybe even use SSE/AVX for this?
+ */
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -116,12 +122,12 @@ uint8_t sat_255(uint32_t x)
     else return (uint8_t)x;
 }
 
-float magnitude(vec3_f v)
+static float magnitude(vec3_f v)
 {
     return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z);
 }
 
-vec3_f add(vec3_f v1, vec3_f v2)
+static vec3_f add(vec3_f v1, vec3_f v2)
 {
     vec3_f v3;
     v3.x = v1.x + v2.x;
@@ -130,7 +136,7 @@ vec3_f add(vec3_f v1, vec3_f v2)
     return v3;
 }
 
-vec3_f sub(vec3_f v1, vec3_f v2)
+static vec3_f sub(vec3_f v1, vec3_f v2)
 {
     vec3_f v3;
     v3.x = v1.x - v2.x;
@@ -139,7 +145,7 @@ vec3_f sub(vec3_f v1, vec3_f v2)
     return v3;
 }
 
-vec3_f normalise(vec3_f v)
+static vec3_f normalise(vec3_f v)
 {
     vec3_f v_norm;
     float mag = magnitude(v);
@@ -152,7 +158,7 @@ vec3_f normalise(vec3_f v)
     return v_norm;
 }
 
-vec3_f mul(vec3_f v, float scalar)
+static vec3_f mul(vec3_f v, float scalar)
 {
     vec3_f v_mul;
     v_mul.x = v.x * scalar;
@@ -161,7 +167,7 @@ vec3_f mul(vec3_f v, float scalar)
     return v_mul;
 }
 
-vec3_f rotate_x(vec3_f v, float theta)
+static vec3_f rotate_x(vec3_f v, float theta)
 {
     vec3_f v_rot;
     float sine = sinf(theta);
@@ -173,12 +179,12 @@ vec3_f rotate_x(vec3_f v, float theta)
     return v_rot;
 }
 
-float dot(vec3_f v1, vec3_f v2)
+static float dot(vec3_f v1, vec3_f v2)
 {
     return (v1.x * v2.x) + (v1.y * v2.y) + (v1.z * v2.z);
 }
 
-float smin(float a, float b, float k)
+static float smin(float a, float b, float k)
 {
     float h = 0.5 + (0.5 * (b - a) / k);
     h = fminf(h, 1.0);
@@ -186,17 +192,17 @@ float smin(float a, float b, float k)
     return ((1.0 - h)*b + h*a) - k * h * (1.0 - h);
 }
 
-float sphere(vec3_f centre, float radius, vec3_f pos)
+static float sphere(vec3_f centre, float radius, vec3_f pos)
 {
     return magnitude(sub(pos, centre)) - radius;
 }
 
-float sphere_sdf(vec3_f pos)
+static float sphere_sdf(vec3_f pos)
 {
     return sphere((vec3_f){0.0, 0.0, 0.0}, 40.0, pos);
 }
 
-float cube_sdf(vec3_f pos)
+static float cube_sdf(vec3_f pos)
 {
     pos = rotate_x(pos, 0.2);
     float distx = fabsf(pos.x) - 29.0;
@@ -209,12 +215,12 @@ float cube_sdf(vec3_f pos)
         return fmaxf(fmaxf(distx, disty), distz);
 }
 
-float plane_sdf(vec3_f pos)
+static float plane_sdf(vec3_f pos)
 {
     return pos.y + 35.0;
 }
 
-float curveplane_sdf(vec3_f pos)
+static float curveplane_sdf(vec3_f pos)
 {
     pos.y += 335.0;
     pos.x = 0.0; /* To make into cylinder */
@@ -223,7 +229,7 @@ float curveplane_sdf(vec3_f pos)
 
 }
 
-float get_sdf(vec3_f pos)
+static float get_sdf(vec3_f pos)
 {
     return smin(sphere_sdf(pos), curveplane_sdf(pos), 20.0);
 /*  return sphere_sdf(pos) - (0.0005 * ((float)rand()/(float)RAND_MAX)); - with some randomness. Ideally would want fixed sdf for a given angle
@@ -236,7 +242,7 @@ void print_vec3_f(vec3_f v)
     printf("{ %f, %f, %f } ", v.x, v.y, v.z);
 }
 
-vec3_f march_ray(vec3_f march_pos, vec3_f march_direction)
+static vec3_f march_ray(vec3_f march_pos, vec3_f march_direction)
 {
     vec3_f march_step;
     vec3_f surface_normal, light_pos, light_vec, reflect_vec;
@@ -261,7 +267,7 @@ vec3_f march_ray(vec3_f march_pos, vec3_f march_direction)
         sdf = get_sdf(march_pos);
     }
 
-    if(sdf < 0.001)
+    if(sdf <= 0.001)
     {
         /* Constants */
         k_spec = (vec3_f){0.4, 0.4, 0.4};
