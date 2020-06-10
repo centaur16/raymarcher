@@ -199,7 +199,7 @@ static float sphere(vec3_f centre, float radius, vec3_f pos)
 
 static float sphere_sdf(vec3_f pos)
 {
-    return sphere((vec3_f){0.0, 0.0, 0.0}, 40.0, pos);
+    return fminf(sphere((vec3_f){20.0, 30.0, -60.0}, 8.0, pos), sphere((vec3_f){0.0, 0.0, 0.0}, 40.0, pos));
 }
 
 static float cube_sdf(vec3_f pos)
@@ -242,11 +242,14 @@ void print_vec3_f(vec3_f v)
     printf("{ %f, %f, %f } ", v.x, v.y, v.z);
 }
 
-static vec3_f march_ray(vec3_f march_pos, vec3_f march_direction)
+static vec3_f march_ray(vec3_f march_pos, vec3_f march_direction, int reflect_level)
 {
     vec3_f march_step;
     vec3_f surface_normal, light_pos, light_vec, reflect_vec;
     vec3_f k_amb, k_diff, diffuse, k_spec, specular, colour;
+    vec3_f reflect_colour;
+    float k_refl;
+    vec3_f reflect_pos;
 
     float sdf;
     float n_spec;
@@ -260,7 +263,7 @@ static vec3_f march_ray(vec3_f march_pos, vec3_f march_direction)
 
     steps = 0;
 
-    while(sdf > 0.001 && steps < 2000)
+    while(sdf > 0.001 && steps < 200000)
     {
         march_pos = add(march_pos, mul(march_step, sdf));
         steps++;
@@ -271,9 +274,10 @@ static vec3_f march_ray(vec3_f march_pos, vec3_f march_direction)
     {
         /* Constants */
         k_spec = (vec3_f){0.4, 0.4, 0.4};
-        n_spec = 5.0;
+        n_spec = 123.0;
         k_diff = (vec3_f){0.15, 0.0, 0.25};
         k_amb = (vec3_f){0.05, 0.0, 0.1};
+        k_refl = 0.3;
 
         /* Get normal to surface */
         surface_normal.x = get_sdf(add(march_pos, mul(UNIT_X, 0.01))) - get_sdf(march_pos);
@@ -288,14 +292,29 @@ static vec3_f march_ray(vec3_f march_pos, vec3_f march_direction)
         /* Calculate specular lighting */
         reflect_vec = normalise(sub(march_step, mul(surface_normal, 2.0*dot(march_step, surface_normal))));
         specular = mul(k_spec, powf(fmaxf(dot(reflect_vec, light_vec), 0.0), n_spec));
- 
-        /* Calculate final colour */
-        colour = add(specular, add(diffuse, k_amb));
 
-        /* Saturate */
-        colour.x = fminf(colour.x, 1.0);
-        colour.y = fminf(colour.y, 1.0);
-        colour.z = fminf(colour.z, 1.0);
+        if (reflect_level > 0)
+        {
+            reflect_vec = normalise(reflect_vec);
+            /* Start reflecting from out of SDF range (~) */
+            reflect_pos = add(march_pos, mul(surface_normal, 0.001));
+            /* March reflection */
+            reflect_colour = march_ray(reflect_pos, reflect_vec, reflect_level - 1);
+            reflect_colour = mul(reflect_colour, k_refl);
+        }
+        else
+        {
+            reflect_colour = (vec3_f){0.0, 0.0, 0.0};
+        }
+
+        /* Calculate final colour */
+        colour = add(add(specular, reflect_colour), add(diffuse, k_amb));
+
+        /* Normalise if too big */
+        if (magnitude(colour) > 1.0)
+        {
+            colour = normalise(colour);
+        }
     }
     else
     {
@@ -328,7 +347,7 @@ void march(pixel *px, uint32_t x, uint32_t y, uint32_t width, uint32_t height, f
 
     ray_direction = normalise(sub(pixel_pos, camera_pos));
 
-    colour = march_ray(march_start_pos, ray_direction);
+    colour = march_ray(march_start_pos, ray_direction, 3);
 
     px->red = (uint8_t)(255.0*colour.x);
     px->green = (uint8_t)(255.0*colour.y);
